@@ -13,7 +13,7 @@ const MAX_IMAGE_SIZE = parseInt(process.env.maxImageSize);
 export const handler = async (event) => {
     // Validate if this is a GET request
     if (!event.requestContext || !event.requestContext.http || !(event.requestContext.http.method === 'GET')) return sendError(400, 'Only GET method is supported', event);
-    // An example of expected path is /images/rio/1.jpeg/format=auto,width=100 or /images/rio/1.jpeg/original where /images/rio/1.jpeg is the path of the original image
+    // An example of expected path is /images/rio/1.jpeg/format=auto,width=100 or /images/rio/1.jpeg/original where /images/rio/1.jpeg is the path of the original file
     var imagePathArray = event.requestContext.http.path.split('/');
     // get the requested image operations
     var operationsPrefix = imagePathArray.pop();
@@ -34,10 +34,28 @@ export const handler = async (event) => {
         contentType = getOriginalImageCommandOutput.ContentType;
     } catch (error) {
         if (error.name === "NoSuchKey") {
-          return sendError(404, "The requested image does not exist", error);
+          return sendError(404, "The requested file does not exist", error);
         }
-        return sendError(500, 'Error downloading original image', error);
+        return sendError(500, 'Error downloading original file', error);
     }
+    // Check if the file is an image that can be processed by Sharp
+    const isImageFile = contentType && contentType.startsWith('image/');
+    
+    if (!isImageFile) {
+        // For non-image files, serve them directly without processing
+        console.log(`Serving non-image file: ${originalImagePath} with content type: ${contentType}`);
+        return {
+            statusCode: 200,
+            body: (await originalImageBody).toString('base64'),
+            isBase64Encoded: true,
+            headers: {
+                'Content-Type': contentType,
+                'Cache-Control': 'public, max-age=31536000', // Cache for 1 year
+                'Server-Timing': 'file-download;dur=' + parseInt(performance.now() - startTime)
+            }
+        };
+    }
+
     let transformedImage = Sharp(await originalImageBody, { failOn: 'none', animated: true });
     // Get image orientation to rotate if needed
     const imageMetadata = await transformedImage.metadata();
