@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import { Fn, Stack, StackProps, RemovalPolicy, aws_s3 as s3, aws_s3_deployment as s3deploy, aws_cloudfront as cloudfront, aws_cloudfront_origins as origins, aws_lambda as lambda, aws_iam as iam, Duration, CfnOutput, aws_logs as logs } from 'aws-cdk-lib';
+import { Fn, Stack, StackProps, RemovalPolicy, aws_s3 as s3, aws_s3_deployment as s3deploy, aws_cloudfront as cloudfront, aws_cloudfront_origins as origins, aws_lambda as lambda, aws_iam as iam, Duration, CfnOutput, aws_logs as logs, aws_certificatemanager as acm } from 'aws-cdk-lib';
 import { CfnDistribution } from "aws-cdk-lib/aws-cloudfront";
 import { Construct } from 'constructs';
 import { getOriginShieldRegion } from './origin-shield';
@@ -27,6 +27,9 @@ var LAMBDA_MEMORY = '1500';
 var LAMBDA_TIMEOUT = '60';
 // Whether to deploy a sample website referenced in https://aws.amazon.com/blogs/networking-and-content-delivery/image-optimization-using-amazon-cloudfront-and-aws-lambda/
 var DEPLOY_SAMPLE_WEBSITE = 'false';
+// Custom domain configuration
+var CUSTOM_DOMAIN_NAME: string;
+var SSL_CERTIFICATE_ARN: string;
 
 type ImageDeliveryCacheBehaviorConfig = {
   origin: any;
@@ -59,6 +62,8 @@ export class ImageOptimizationStack extends Stack {
     LAMBDA_TIMEOUT = this.node.tryGetContext('LAMBDA_TIMEOUT') || LAMBDA_TIMEOUT;
     MAX_IMAGE_SIZE = this.node.tryGetContext('MAX_IMAGE_SIZE') || MAX_IMAGE_SIZE;
     DEPLOY_SAMPLE_WEBSITE = this.node.tryGetContext('DEPLOY_SAMPLE_WEBSITE') || DEPLOY_SAMPLE_WEBSITE;
+    CUSTOM_DOMAIN_NAME = this.node.tryGetContext('CUSTOM_DOMAIN_NAME') || CUSTOM_DOMAIN_NAME;
+    SSL_CERTIFICATE_ARN = this.node.tryGetContext('SSL_CERTIFICATE_ARN') || SSL_CERTIFICATE_ARN;
     
 
     // deploy a sample website for testing if required
@@ -243,9 +248,21 @@ export class ImageOptimizationStack extends Stack {
       });
       imageDeliveryCacheBehaviorConfig.responseHeadersPolicy = imageResponseHeadersPolicy;
     }
+    // Configure custom domain if provided
+    var domainNames: string[] = [];
+    var certificate: acm.ICertificate | undefined;
+    
+    if (CUSTOM_DOMAIN_NAME && SSL_CERTIFICATE_ARN) {
+      domainNames = [CUSTOM_DOMAIN_NAME];
+      certificate = acm.Certificate.fromCertificateArn(this, 'CustomDomainCertificate', SSL_CERTIFICATE_ARN);
+    }
+
     const imageDelivery = new cloudfront.Distribution(this, 'imageDeliveryDistribution', {
       comment: 'image optimization - image delivery',
-      defaultBehavior: imageDeliveryCacheBehaviorConfig
+      defaultBehavior: imageDeliveryCacheBehaviorConfig,
+      domainNames: domainNames,
+      certificate: certificate,
+      minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
     });
 
     // ADD OAC between CloudFront and LambdaURL
@@ -271,5 +288,12 @@ export class ImageOptimizationStack extends Stack {
       description: 'Domain name of image delivery',
       value: imageDelivery.distributionDomainName
     });
+
+    if (CUSTOM_DOMAIN_NAME) {
+      new CfnOutput(this, 'CustomDomainName', {
+        description: 'Custom domain name for image delivery',
+        value: CUSTOM_DOMAIN_NAME
+      });
+    }
   }
 }
