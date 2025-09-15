@@ -4,6 +4,12 @@
 function handler(event) {
     var request = event.request;
     var originalImagePath = request.uri;
+    
+    // Check if this is a /files/ path - if so, let it pass through to S3 directly
+    if (originalImagePath.startsWith('/files/')) {
+        return request; // Let /files/ requests pass through to S3 directly
+    }
+    
     //  validate, process and normalize the requested operations in query parameters
     var normalizedOperations = {};
     if (request.querystring) {
