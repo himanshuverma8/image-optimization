@@ -13,7 +13,40 @@ const MAX_IMAGE_SIZE = parseInt(process.env.maxImageSize);
 export const handler = async (event) => {
     // Validate if this is a GET request
     if (!event.requestContext || !event.requestContext.http || !(event.requestContext.http.method === 'GET')) return sendError(400, 'Only GET method is supported', event);
-    // An example of expected path is /images/rio/1.jpeg/format=auto,width=100 or /images/rio/1.jpeg/original where /images/rio/1.jpeg is the path of the original file
+    
+    // Check if this is a /files/ path - serve the file directly from S3
+    if (event.requestContext.http.path.startsWith('/files/')) {
+        const requestPath = event.requestContext.http.path;
+        // Prefer keys that include the "files/" prefix (common when uploading to a folder),
+        // but fall back to the key without the prefix if not found.
+        const keyWithPrefix = requestPath.replace(/^\//, ''); // e.g. files/hv_s_Resume_overleaf.pdf
+        const keyWithoutPrefix = keyWithPrefix.replace(/^files\//, ''); // e.g. hv_s_Resume_overleaf.pdf
+        const candidateKeys = [keyWithPrefix, keyWithoutPrefix];
+        for (const candidateKey of candidateKeys) {
+            try {
+                const data = await s3Client.send(new GetObjectCommand({ Bucket: S3_ORIGINAL_IMAGE_BUCKET, Key: candidateKey }));
+                const body = await data.Body.transformToByteArray();
+                return {
+                    statusCode: 200,
+                    isBase64Encoded: true,
+                    body: Buffer.from(body).toString('base64'),
+                    headers: {
+                        'Content-Type': data.ContentType ?? 'application/octet-stream',
+                        'Cache-Control': 'public, max-age=31536000'
+                    }
+                };
+            } catch (e) {
+                if (e.name === 'NoSuchKey') {
+                    // Try the next candidate key
+                    continue;
+                }
+                return { statusCode: 500, body: 'S3 error' };
+            }
+        }
+        return { statusCode: 404, body: 'Not found' };
+    }
+    
+    // An example of expected path is /images/rio/1.jpeg/format=auto,width=100 or /images/rio/1.jpeg/original where /images/rio/1.jpeg is the path of the original image
     var imagePathArray = event.requestContext.http.path.split('/');
     // get the requested image operations
     var operationsPrefix = imagePathArray.pop();
@@ -34,28 +67,10 @@ export const handler = async (event) => {
         contentType = getOriginalImageCommandOutput.ContentType;
     } catch (error) {
         if (error.name === "NoSuchKey") {
-          return sendError(404, "The requested file does not exist", error);
+          return sendError(404, "The requested image does not exist", error);
         }
-        return sendError(500, 'Error downloading original file', error);
+        return sendError(500, 'Error downloading original image', error);
     }
-    // Check if the file is an image that can be processed by Sharp
-    const isImageFile = contentType && contentType.startsWith('image/');
-    
-    if (!isImageFile) {
-        // For non-image files, serve them directly without processing
-        console.log(`Serving non-image file: ${originalImagePath} with content type: ${contentType}`);
-        return {
-            statusCode: 200,
-            body: (await originalImageBody).toString('base64'),
-            isBase64Encoded: true,
-            headers: {
-                'Content-Type': contentType,
-                'Cache-Control': 'public, max-age=31536000', // Cache for 1 year
-                'Server-Timing': 'file-download;dur=' + parseInt(performance.now() - startTime)
-            }
-        };
-    }
-
     let transformedImage = Sharp(await originalImageBody, { failOn: 'none', animated: true });
     // Get image orientation to rotate if needed
     const imageMetadata = await transformedImage.metadata();
